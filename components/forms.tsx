@@ -944,6 +944,8 @@ export function SessionDetailsDialog({
   close: () => void;
 }) {
   const [link, setLink] = useState(session.link);
+  const [loadedLink, setLoadedLink] = useState(session.link);
+  const linkChanged = session.link !== loadedLink;
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [outcome, setOutcome] = useState<'completed' | 'no_show'>('completed');
   const form = useFormTask();
@@ -1042,12 +1044,28 @@ export function SessionDetailsDialog({
         onSubmit={(event) => {
           event.preventDefault();
           void form.run(async () => {
+            if (linkChanged) throw new Error('Load the latest meeting link before saving.');
             if (!safeMeetingLink(link)) throw new Error('Use an HTTPS Google Meet or Zoom link.');
             await mutate({ type: 'link', id: session.id, link }, 'Meeting link saved.');
             close();
           });
         }}
       >
+        {linkChanged && (
+          <p className="form-error">
+            The meeting link changed.{' '}
+            <button
+              type="button"
+              className="text-link"
+              onClick={() => {
+                setLink(session.link);
+                setLoadedLink(session.link);
+              }}
+            >
+              Load latest link
+            </button>
+          </p>
+        )}
         <label>
           Meet or Zoom link
           <input

@@ -1,4 +1,5 @@
 'use client';
+import { clearDrafts } from '@/lib/drafts';
 import { sessionPhase, sessionLabels } from '@/lib/sessions';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -105,8 +106,23 @@ const viewTitles: Record<View, [string, string, string]> = {
 };
 const STORAGE_KEY = 'wunderbar-workspace-v1';
 
-export default function Workspace({ initial, demo }: { initial: WorkspaceData; demo: boolean }) {
+export default function Workspace({
+  initial,
+  demo,
+  ownerId,
+}: {
+  initial: WorkspaceData;
+  demo: boolean;
+  ownerId: string;
+}) {
   const [data, setData] = useState(initial);
+  const dataRef = useRef(initial);
+  const replaceData = useCallback((next: WorkspaceData) => {
+    dataRef.current = next;
+    setData(next);
+  }, []);
+  const [authRequired, setAuthRequired] = useState(false);
+  const refreshPending = useRef(false);
   const [loaded, setLoaded] = useState(false);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -128,10 +144,13 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
   const storageWarned = useRef(false);
   const [mobile, setMobile] = useState(false);
   const fetchWorkspace = useCallback(async () => {
-    const response = await fetch('/api/workspace', { cache: 'no-store' });
+    const response = await fetch('/api/workspace', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15000),
+    });
     if (response.status === 401) {
-      window.location.assign('/login');
-      throw new Error('Please sign in again.');
+      setAuthRequired(true);
+      throw new Error('Your session expired. Sign in again to sync your changes.');
     }
     const result = await response.json();
     if (!response.ok)
@@ -139,19 +158,32 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
     const parsed = workspaceSchema.safeParse(result.workspace);
     if (!parsed.success)
       throw new Error('Your workspace could not be read. Please contact the administrator.');
-    setData(parsed.data);
+    if (result.userId !== ownerId)
+      throw new Error('Your signed-in account changed. Reload before continuing.');
+    replaceData(parsed.data);
+    setAuthRequired(false);
     setAdmin(result.admin === true);
     setMembers(result.members ?? []);
     setError('');
-    if (!parsed.data.profile.onboarded) setDialog({ type: 'profile' });
+    if (!parsed.data.profile.onboarded) setDialog((current) => current ?? { type: 'profile' });
+    return parsed.data;
+  }, [ownerId, replaceData]);
+  const enqueue = useCallback(<T,>(work: () => Promise<T>): Promise<T> => {
+    const next = queue.current.catch(() => undefined).then(work);
+    queue.current = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }, []);
+  const refresh = useCallback(() => enqueue(fetchWorkspace), [enqueue, fetchWorkspace]);
   useEffect(() => {
     if (demo) {
       try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
           const parsed = workspaceSchema.safeParse(JSON.parse(saved));
-          if (parsed.success) setData(parsed.data);
+          if (parsed.success) replaceData(parsed.data);
           else setError('The saved demo could not be read. Sample content has been restored.');
         }
       } catch {
@@ -159,11 +191,33 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
       }
       setLoaded(true);
     } else {
-      void fetchWorkspace()
+      void refresh()
         .then(() => setLoaded(true))
         .catch((reason) => setError(reason.message));
     }
-  }, [demo, fetchWorkspace]);
+  }, [demo, refresh, replaceData]);
+  useEffect(() => {
+    if (demo || !loaded) return;
+    const sync = () => {
+      if (document.visibilityState !== 'visible' || refreshPending.current) return;
+      refreshPending.current = true;
+      void refresh()
+        .catch((reason) => setError(`Could not refresh. ${reason.message}`))
+        .finally(() => {
+          refreshPending.current = false;
+        });
+    };
+    window.addEventListener('focus', sync);
+    window.addEventListener('online', sync);
+    document.addEventListener('visibilitychange', sync);
+    const interval = setInterval(sync, 30000);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', sync);
+      window.removeEventListener('online', sync);
+      document.removeEventListener('visibilitychange', sync);
+    };
+  }, [demo, loaded, refresh]);
   useEffect(() => {
     if (!demo || !loaded) return;
     try {
@@ -239,27 +293,47 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
     setMenu(false);
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
-  const mutate = async (action: Action, message?: string) => {
-    const operation = queue.current
-      .catch(() => undefined)
-      .then(async () => {
-        if (demo) setData((current) => reduceWorkspace(current, action));
-        else {
-          const response = await fetch('/api/workspace', {
+  const mutate = (action: Action, message?: string) =>
+    enqueue(async () => {
+      if (demo) replaceData(reduceWorkspace(dataRef.current, action));
+      else {
+        let response: Response;
+        try {
+          response = await fetch('/api/workspace', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'x-workspace-user': ownerId },
             body: JSON.stringify(action),
+            signal: AbortSignal.timeout(15000),
           });
-          const result = await response.json();
-          if (!response.ok)
-            throw new Error(result.error || 'That change could not be saved. Please try again.');
-          await fetchWorkspace();
+        } catch {
+          throw new Error(
+            'We could not confirm this save. Your input is still here. Refresh the workspace before retrying.',
+          );
         }
-        if (message) setToast(message);
-      });
-    queue.current = operation;
-    return operation;
-  };
+        if (!response.ok) {
+          if (response.status === 401) setAuthRequired(true);
+          const result = await response.json().catch(() => ({}));
+          throw new Error(result.error || 'That change could not be saved. Please try again.');
+        }
+        // A confirmed write remains successful even if its follow-up read fails.
+        // Scheduling gets a server-generated ID, so it must wait for a fresh read.
+        if (action.type !== 'schedule') {
+          try {
+            replaceData(reduceWorkspace(dataRef.current, action));
+          } catch {
+            /* The server result will reconcile stale local state. */
+          }
+        }
+        try {
+          await fetchWorkspace();
+        } catch {
+          setError(
+            'Your change was saved, but the latest workspace could not be loaded. Refresh to see the latest updates.',
+          );
+        }
+      }
+      if (message) setToast(message);
+    });
   const act = (action: Action, message?: string) => {
     void mutate(action, message).catch((reason) => setToast(reason.message));
   };
@@ -268,6 +342,11 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
     try {
       const response = await fetch('/api/workspace', { method: 'DELETE' });
       if (!response.ok) throw new Error('Could not sign out. Please try again.');
+      try {
+        clearDrafts(localStorage, ownerId);
+      } catch {
+        /* Sign-out still completes when browser storage is unavailable. */
+      }
       window.location.assign('/');
     } catch (reason) {
       setToast(reason instanceof Error ? reason.message : 'Could not sign out.');
@@ -282,8 +361,43 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
   const title = viewTitles[view];
   const newSession = () =>
     demo || admin ? setDialog({ type: 'schedule' }) : setDialog({ type: 'availability' });
-  const openPractice = (session?: Session, question?: Question) =>
-    setDialog({ type: 'practice', session, question });
+  const openPractice = (session?: Session, question?: Question) => {
+    if (demo || !session) {
+      setDialog({ type: 'practice', session, question });
+      return;
+    }
+    void refresh()
+      .then((fresh) => {
+        const current = fresh.sessions.find((s) => s.id === session.id);
+        if (!current || current.status !== 'upcoming')
+          throw new Error('This session is no longer available for practice.');
+        setDialog({ type: 'practice', session: current, question });
+      })
+      .catch((reason) => setError(reason.message));
+  };
+  const joinMeeting = async (id: string) => {
+    const popup = window.open('about:blank', '_blank');
+    if (!popup) throw new Error('Allow pop-ups for Wunderbar to open your meeting.');
+    popup.opener = null;
+    try {
+      const fresh = demo ? dataRef.current : await refresh();
+      const session = fresh.sessions.find((s) => s.id === id);
+      if (!session || sessionPhase(session) !== 'upcoming' || !session.link)
+        throw new Error(
+          'The session or meeting link is no longer available. Check your session details.',
+        );
+      popup.location.replace(session.link);
+    } catch (reason) {
+      popup.close();
+      throw reason;
+    }
+  };
+  const currentSession = (session: Session) =>
+    data.sessions.find((s) => s.id === session.id) ?? {
+      ...session,
+      status: 'cancelled' as const,
+      link: '',
+    };
   const calendar = (session: Session) => {
     download(calendarFile(session), `wunderbar-${session.id}.ics`, 'text/calendar;charset=utf-8');
     setToast('Calendar file downloaded. Import it into your calendar.');
@@ -526,12 +640,17 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
           {error && (
             <div className="error-banner" role="alert">
               {error}
+              {authRequired && (
+                <a className="text-link" href="/login">
+                  Sign in again
+                </a>
+              )}
               {!demo && (
                 <button
                   className="text-link"
                   style={{ marginLeft: 10 }}
                   onClick={() =>
-                    void fetchWorkspace()
+                    void refresh()
                       .then(() => setLoaded(true))
                       .catch((reason) => setError(reason.message))
                   }
@@ -939,7 +1058,13 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
                                 className={`icon-button ${data.savedQuestions.includes(q.id) ? 'saved-icon' : ''}`}
                                 aria-label={`${data.savedQuestions.includes(q.id) ? 'Unsave' : 'Save'} question: ${q.prompt}`}
                                 aria-pressed={data.savedQuestions.includes(q.id)}
-                                onClick={() => act({ type: 'bookmark', id: q.id })}
+                                onClick={() =>
+                                  act({
+                                    type: 'bookmark',
+                                    id: q.id,
+                                    saved: !dataRef.current.savedQuestions.includes(q.id),
+                                  })
+                                }
                               >
                                 <Bookmark
                                   size={17}
@@ -1277,11 +1402,15 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
       )}
       {dialog?.type === 'idea' && <IdeaDialog demo={demo} mutate={mutate} close={close} />}
       {dialog?.type === 'details' && (
-        <SessionDetailsDialog session={dialog.session} mutate={mutate} close={close} />
+        <SessionDetailsDialog
+          session={currentSession(dialog.session)}
+          mutate={mutate}
+          close={close}
+        />
       )}
       {dialog?.type === 'review' && (
         <ReviewDialog
-          session={dialog.session}
+          session={currentSession(dialog.session)}
           review={data.reviews.find((r) => r.sessionId === dialog.session.id && !r.received)}
           author={data.profile.name}
           demo={demo}
@@ -1293,14 +1422,23 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
         <QuestionDialog
           question={dialog.question}
           saved={data.savedQuestions.includes(dialog.question.id)}
-          toggle={() => act({ type: 'bookmark', id: dialog.question.id })}
+          toggle={() =>
+            act({
+              type: 'bookmark',
+              id: dialog.question.id,
+              saved: !dataRef.current.savedQuestions.includes(dialog.question.id),
+            })
+          }
           practice={() => openPractice(undefined, dialog.question)}
           close={close}
         />
       )}
       {dialog?.type === 'practice' && (
         <PracticeRoom
-          session={dialog.session}
+          key={dialog.session?.id ?? dialog.question?.id}
+          ownerId={ownerId}
+          joinMeeting={joinMeeting}
+          session={dialog.session ? currentSession(dialog.session) : undefined}
           question={dialog.question}
           demo={demo}
           mutate={mutate}

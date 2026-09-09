@@ -23,6 +23,16 @@ export default function Privacy() {
         Your story drafts and interview notes are private to your account. Product feedback is
         visible to you and the administrator. The first version has no public story sharing.
       </p>
+      <h2>Drafts on this device</h2>
+      <p>
+        Interview drafts, including solo practice notes, are saved in this browser as you type.
+        Connected drafts are stored under your account identifier. They can survive a page reload or
+        an expired session, but do not sync to another device until saved to your account. Confirmed
+        peer-note saves clear the matching local draft; newer unsaved edits are retained. You can
+        discard drafts in the guide. Signing out clears that account’s drafts when browser storage
+        is available. Anyone with access to your browser storage may access its local data; clearing
+        browser storage removes unsynced drafts.
+      </p>
       <h2>Your call stays on your call platform</h2>
       <p>
         Wunderbar opens the Meet or Zoom link supplied for a session. It does not record your

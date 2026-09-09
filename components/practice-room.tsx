@@ -1,10 +1,12 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight, ExternalLink, Pause, Play, RotateCcw, Check } from 'lucide-react';
 import { questions, rubric, type Question } from '@/content/questions';
 import type { Session, Story } from '@/lib/model';
 import { Modal, Meta, Badge } from './ui';
 import type { Mutate } from './forms';
+import { useNoteDraft } from './use-note-draft';
+import { download } from '@/lib/date';
 type ClockState = {
   elapsed: number;
   started: number;
@@ -13,6 +15,8 @@ type ClockState = {
   role: 'answering' | 'interviewing';
 };
 export function PracticeRoom({
+  ownerId,
+  joinMeeting,
   session,
   question,
   mutate,
@@ -21,6 +25,8 @@ export function PracticeRoom({
   saveStory,
   demo,
 }: {
+  ownerId: string;
+  joinMeeting: (id: string) => Promise<void>;
   session?: Session;
   question?: Question;
   mutate: Mutate;
@@ -35,7 +41,8 @@ export function PracticeRoom({
         .map((id) => questions.find((q) => q.id === id))
         .filter((q): q is Question => !!q) ?? []);
   const set = questionSet.length ? questionSet : questions.slice(0, 3);
-  const key = `wunderbar-timer-${session?.id ?? question?.id ?? 'solo'}`;
+  const target = session?.id ?? `solo-${question?.id ?? 'default'}`;
+  const key = `wunderbar-timer-v2:${encodeURIComponent(ownerId)}:${target}`;
   const [clock, setClock] = useState<ClockState>({
     elapsed: 0,
     started: 0,
@@ -45,11 +52,10 @@ export function PracticeRoom({
   });
   const [now, setNow] = useState(Date.now());
   const [ready, setReady] = useState(false);
-  const [notes, setNotes] = useState<Record<string, string>>(session?.notes ?? {});
-  const [saving, setSaving] = useState(false);
+  const draft = useNoteDraft(ownerId, target, session?.notes ?? {}, !!session && !demo);
+  const { notes, saving } = draft;
   const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
-  const lastSaved = useRef(JSON.stringify(session?.notes ?? {}));
+  const [joining, setJoining] = useState(false);
   const current = set[Math.min(clock.index, set.length - 1)];
   useEffect(() => {
     try {
@@ -98,26 +104,31 @@ export function PracticeRoom({
     );
   };
   const save = async () => {
-    if (!session || JSON.stringify(notes) === lastSaved.current) return;
-    setSaving(true);
+    if (!session || !draft.dirty || saving) return;
+    if (
+      draft.remoteChanged &&
+      !window.confirm('Saved notes changed on another device. Replace them with your local draft?')
+    )
+      throw new Error('Save cancelled. Your draft is still on this device.');
+    const snapshot = draft.beginSave();
     setError('');
     try {
-      await mutate({ type: 'notes', id: session.id, notes });
-      lastSaved.current = JSON.stringify(notes);
-      setSaved(true);
+      await mutate({ type: 'notes', id: session.id, notes: snapshot });
+      draft.saved(snapshot);
     } catch (reason) {
+      draft.failed();
       setError(reason instanceof Error ? reason.message : 'Could not save your notes. Try again.');
       throw reason;
-    } finally {
-      setSaving(false);
     }
   };
   const leave = () => {
+    if (saving) return;
     void save()
       .then(close)
       .catch(() => undefined);
   };
   const end = () => {
+    if (saving) return;
     void save()
       .then(() => {
         setClock((old) => ({ ...old, running: false, elapsed }));
@@ -162,12 +173,29 @@ export function PracticeRoom({
             I’m interviewing
           </button>
         </div>
-        {session?.link && (
-          <a className="text-link" href={session.link} target="_blank" rel="noopener noreferrer">
-            Open your call <ExternalLink size={14} />
-          </a>
+        {session?.link && session.status === 'upcoming' && (
+          <button
+            className="text-link"
+            disabled={joining}
+            onClick={() => {
+              setJoining(true);
+              setError('');
+              void joinMeeting(session.id)
+                .catch((reason) => setError(reason.message))
+                .finally(() => setJoining(false));
+            }}
+          >
+            {joining ? 'Checking session…' : 'Join meeting'} <ExternalLink size={13} />
+          </button>
         )}
       </div>
+      {session && session.status !== 'upcoming' && (
+        <p className="form-error" role="status">
+          This session is{' '}
+          {session.status === 'no_show' ? 'recorded as not having taken place' : session.status}.
+          Your notes remain available.
+        </p>
+      )}
       {session && !session.link && !demo && (
         <div className="intro-note">
           <p>
@@ -203,11 +231,11 @@ export function PracticeRoom({
           <label>
             Your private notes
             <textarea
+              disabled={!draft.ready}
               value={notes[current.id] ?? ''}
               maxLength={10000}
               onChange={(event) => {
-                setNotes((old) => ({ ...old, [current.id]: event.target.value }));
-                setSaved(false);
+                draft.edit(current.id, event.target.value);
               }}
               placeholder={
                 clock.role === 'interviewing'
@@ -220,7 +248,7 @@ export function PracticeRoom({
           <div className="row-between" style={{ marginTop: 9 }}>
             <p className="saved-note">
               {session
-                ? saved
+                ? !draft.dirty && !saving
                   ? 'Notes saved. Only you can see them.'
                   : 'Save your notes before switching devices.'
                 : 'Turn these draft notes into a STAR story when you finish.'}
@@ -236,6 +264,39 @@ export function PracticeRoom({
               </button>
             )}
           </div>
+          <button
+            className="text-link"
+            onClick={() =>
+              download(JSON.stringify(notes, null, 2), 'wunderbar-practice-notes.json')
+            }
+          >
+            Download notes
+          </button>
+          <p className="form-note" role="status">
+            {draft.notice}
+          </p>
+          {draft.remoteChanged && (
+            <p className="form-error">
+              Saved notes changed on another device. Your local draft has been kept; saving will ask
+              before replacing the saved version.
+            </p>
+          )}
+          {draft.localSaved && (
+            <button
+              className="text-link"
+              onClick={() => {
+                if (window.confirm('Discard this local draft and restore the saved notes?'))
+                  draft.discard();
+              }}
+            >
+              Discard local draft
+            </button>
+          )}
+          {error && draft.localSaved && (
+            <button className="text-link" onClick={close}>
+              Close and keep draft
+            </button>
+          )}
           {error && (
             <p className="form-error" role="alert">
               {error}

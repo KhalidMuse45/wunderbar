@@ -14,12 +14,21 @@ export default async function PracticePage({
   const params = await searchParams;
   const configured = backendConfigured();
   const demo = !configured || params.demo === '1';
+  let ownerId = 'demo';
   if (!demo) {
     const supabase = await serverClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) redirect('/login');
+    ownerId = user.id;
   }
-  return <Workspace initial={demo ? demoWorkspace() : emptyWorkspace} demo={demo} />;
+  return (
+    <Workspace
+      key={ownerId}
+      ownerId={ownerId}
+      initial={demo ? demoWorkspace() : emptyWorkspace}
+      demo={demo}
+    />
+  );
 }

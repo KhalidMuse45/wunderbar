@@ -137,7 +137,7 @@ export async function GET() {
       check(result);
       members = (result.data ?? []).map((m) => ({ ...m, skipWeeks: m.skip_weeks }));
     }
-    return json({ workspace, admin: adminResult.data === true, members });
+    return json({ userId: id, workspace, admin: adminResult.data === true, members });
   } catch {
     return json(
       { error: 'Your workspace could not be loaded. Check the database setup and try again.' },
@@ -152,6 +152,7 @@ const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('deleteStory'), id: z.string().uuid() }),
   z.object({
     type: z.literal('bookmark'),
+    saved: z.boolean(),
     id: z.string().refine((id) => questions.some((q) => q.id === id)),
   }),
   z.object({
@@ -187,6 +188,11 @@ export async function POST(request: NextRequest) {
   try {
     const { client, user } = await auth();
     if (!user) return json({ error: 'Please sign in.' }, 401);
+    if (
+      request.headers.has('x-workspace-user') &&
+      request.headers.get('x-workspace-user') !== user.id
+    )
+      return json({ error: 'Your signed-in account changed. Reload before saving.' }, 409);
     const raw = await request.text();
     if (raw.length > 150000) return json({ error: 'That content is too large.' }, 413);
     let value: unknown;
@@ -241,21 +247,18 @@ export async function POST(request: NextRequest) {
       case 'deleteStory':
         check(await client.from('stories').delete().eq('id', a.id).eq('user_id', id));
         break;
-      case 'bookmark': {
-        const result = await client
-          .from('bookmarks')
-          .select('question_id')
-          .eq('user_id', id)
-          .eq('question_id', a.id)
-          .maybeSingle();
-        check(result);
+      case 'bookmark':
         check(
-          result.data
-            ? await client.from('bookmarks').delete().eq('user_id', id).eq('question_id', a.id)
-            : await client.from('bookmarks').insert({ user_id: id, question_id: a.id }),
+          a.saved
+            ? await client
+                .from('bookmarks')
+                .upsert(
+                  { user_id: id, question_id: a.id },
+                  { onConflict: 'user_id,question_id', ignoreDuplicates: true },
+                )
+            : await client.from('bookmarks').delete().eq('user_id', id).eq('question_id', a.id),
         );
         break;
-      }
       case 'schedule': {
         const isAdmin = await client.rpc('is_admin');
         check(isAdmin);

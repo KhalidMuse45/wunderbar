@@ -28,6 +28,13 @@ let expired = false;
 let saves = 0;
 let sessions = [];
 let reviews = [];
+let bookmarks = [];
+let notes = {};
+let notesSaves = 0;
+let failNotes = false;
+let notesDelay = 0;
+let failReadAfterSave = false;
+let reads = 0;
 
 function token() {
   const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -59,6 +66,13 @@ createServer(async (request, response) => {
     expired = false;
     saves = 0;
     reviews = [];
+    bookmarks = [];
+    notes = {};
+    notesSaves = 0;
+    failNotes = false;
+    notesDelay = 0;
+    failReadAfterSave = false;
+    reads = 0;
     sessions = body.session
       ? [
           {
@@ -80,11 +94,16 @@ createServer(async (request, response) => {
     return send(200, { reset: true });
   }
   if (url.pathname === '/__test/state' && request.method === 'GET')
-    return send(200, { profile, saves, sessions, reviews });
+    return send(200, { profile, saves, sessions, reviews, bookmarks, notes, notesSaves, reads });
   if (url.pathname === '/__test/control' && request.method === 'POST') {
     if ('failSave' in body) failSave = body.failSave;
     if ('failLoad' in body) failLoad = body.failLoad;
     if ('expired' in body) expired = body.expired;
+    if ('failReadAfterSave' in body) failReadAfterSave = body.failReadAfterSave;
+    if ('failNotes' in body) failNotes = body.failNotes;
+    if ('notesDelay' in body) notesDelay = body.notesDelay;
+    if ('notes' in body) notes = body.notes;
+    if (body.session && sessions[0]) Object.assign(sessions[0], body.session);
     return send(200, { updated: true });
   }
   if (url.pathname === '/auth/v1/verify' && request.method === 'POST') {
@@ -115,8 +134,10 @@ createServer(async (request, response) => {
         if (failSave) return send(503, { message: 'Temporary database failure.' });
         profile = { ...profile, ...body };
         saves++;
+        if (failReadAfterSave) failLoad = true;
         return send(200, null);
       }
+      reads++;
       if (failLoad) return send(500, { message: 'Temporary database failure.' });
       return send(
         200,
@@ -126,6 +147,27 @@ createServer(async (request, response) => {
             ? [profile]
             : [],
       );
+    }
+    if (url.pathname === '/rest/v1/bookmarks') {
+      if (request.method === 'POST') {
+        if (!bookmarks.some((b) => b.question_id === body.question_id))
+          bookmarks.push({ question_id: body.question_id });
+      }
+      if (request.method === 'DELETE')
+        bookmarks = bookmarks.filter(
+          (b) => b.question_id !== url.searchParams.get('question_id')?.slice(3),
+        );
+      return send(200, request.method === 'GET' ? bookmarks : null);
+    }
+    if (url.pathname === '/rest/v1/session_notes') {
+      if (request.method === 'POST') {
+        if (failNotes) return send(500, { message: 'Notes could not be saved.' });
+        if (notesDelay) await new Promise((resolve) => setTimeout(resolve, notesDelay));
+        notes = body.notes;
+        notesSaves++;
+        return send(200, null);
+      }
+      return send(200, sessions.length ? [{ session_id: sessions[0].id, notes }] : []);
     }
     if (url.pathname === '/rest/v1/rpc/is_admin') return send(200, false);
     if (url.pathname === '/rest/v1/sessions') return send(200, sessions);

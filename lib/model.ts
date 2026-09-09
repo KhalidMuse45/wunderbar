@@ -140,7 +140,7 @@ export type Action =
   | { type: 'profile'; profile: Profile }
   | { type: 'story'; story: Story }
   | { type: 'deleteStory'; id: string }
-  | { type: 'bookmark'; id: string }
+  | { type: 'bookmark'; id: string; saved: boolean }
   | { type: 'schedule'; session: Session; hostId?: string; guestId?: string }
   | { type: 'notes'; id: string; notes: Record<string, string> }
   | { type: 'outcome'; id: string; outcome: 'completed' | 'no_show' }
@@ -180,9 +180,9 @@ export function reduceWorkspace(state: Workspace, action: Action): Workspace {
     case 'bookmark':
       return {
         ...state,
-        savedQuestions: state.savedQuestions.includes(action.id)
-          ? state.savedQuestions.filter((id) => id !== action.id)
-          : [...state.savedQuestions, action.id],
+        savedQuestions: action.saved
+          ? [...new Set([...state.savedQuestions, action.id])]
+          : state.savedQuestions.filter((id) => id !== action.id),
       };
     case 'schedule':
       return { ...state, sessions: [action.session, ...state.sessions] };
