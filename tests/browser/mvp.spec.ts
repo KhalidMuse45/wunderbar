@@ -126,7 +126,18 @@ test('plan a session, download calendar, practice, save notes, and give feedback
   await expect(page.getByText('Notes saved. Only you can see them.')).toBeVisible();
   await page.getByRole('button', { name: 'Next question' }).click();
   await expect(page.getByText('QUESTION 2 OF 3')).toBeVisible();
-  await page.getByRole('button', { name: 'Finish & give feedback' }).click();
+  const startsAt = await page.evaluate(
+    () =>
+      JSON.parse(localStorage.getItem('wunderbar-workspace-v1')!).sessions.find(
+        (s: { partner: string; startsAt: string }) => s.partner === 'Casey Test',
+      ).startsAt,
+  );
+  await page.clock.install({ time: new Date(Date.parse(startsAt) + 3600001) });
+  await page.getByRole('button', { name: 'Finish session' }).click();
+  await expect(page.getByRole('heading', { name: 'How did the session go?' })).toBeVisible();
+  await page.getByRole('button', { name: 'Save outcome', exact: true }).click();
+  await page.getByRole('button', { name: /Completed ·/ }).click();
+  await card.getByRole('button', { name: 'Leave feedback', exact: true }).click();
   await page
     .getByRole('textbox', { name: 'One thing that worked' })
     .fill('Your example showed exactly how you helped your teammate.');

@@ -15,10 +15,26 @@ export function timeLabel(instant: string, timezone = 'America/Chicago') {
     timeZoneName: 'short',
   }).format(new Date(instant));
 }
-export function localDay(date = new Date()) {
+export function localDay(date = new Date(), timezone?: string) {
+  if (timezone) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    return ['year', 'month', 'day']
+      .map((key) => parts.find((p) => p.type === key)?.value)
+      .join('-');
+  }
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
-export function monday(date = new Date()) {
+export function monday(date = new Date(), timezone?: string) {
+  if (timezone) {
+    const value = new Date(`${localDay(date, timezone)}T12:00:00Z`);
+    value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7));
+    return value.toISOString().slice(0, 10);
+  }
   const value = new Date(date);
   value.setDate(value.getDate() - ((value.getDay() + 6) % 7));
   return localDay(value);

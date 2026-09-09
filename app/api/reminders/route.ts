@@ -38,6 +38,7 @@ export async function POST(request: NextRequest) {
       if (sessionError || !session) throw new Error('Missing session.');
       // Re-read after claiming so a cancellation suppresses already queued reminders.
       if (
+        session.status === 'no_show' ||
         (session.status === 'cancelled' && job.kind !== 'cancelled') ||
         (['day_before', 'hour_before'].includes(job.kind) &&
           (session.status !== 'upcoming' || Date.parse(session.starts_at) < Date.now()))
@@ -94,7 +95,7 @@ export async function POST(request: NextRequest) {
       const text =
         job.kind === 'cancelled'
           ? `Your Wunderbar session with ${partner} on ${when} was cancelled. Visit your workspace to update your availability or contact the administrator about a new time.`
-          : `${job.kind === 'feedback' ? 'After your session, leave your partner one specific strength and one thing to try next time.' : `You’re practicing ${session.focus.toLowerCase()} with ${partner} on ${when}. Take turns interviewing and make a little room for feedback.`}\n\n${session.meeting_link ? `Meeting: ${session.meeting_link}\n\n` : 'Your meeting link will appear in your session details once added.\n\n'}Your workspace: ${site.replace(/\/$/, '')}/practice#sessions`;
+          : `${job.kind === 'feedback' ? (session.status === 'completed' ? 'Leave your partner one specific strength and one thing to try next time.' : 'Record whether your scheduled session took place. If you practiced together, mark it completed and leave your partner feedback.') : `You’re practicing ${session.focus.toLowerCase()} with ${partner} on ${when}. Take turns interviewing and make a little room for feedback.`}\n\n${session.meeting_link ? `Meeting: ${session.meeting_link}\n\n` : 'Your meeting link will appear in your session details once added.\n\n'}Your workspace: ${site.replace(/\/$/, '')}/practice#sessions`;
       const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {

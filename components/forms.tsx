@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useState, type FormEvent } from 'react';
+import { Fragment, useMemo, useState, type FormEvent } from 'react';
 import { ArrowUpRight, Check, Download, Plus, Trash2 } from 'lucide-react';
 import { competencies, questions, rubric, type Question } from '@/content/questions';
 import {
@@ -16,9 +16,12 @@ import {
   type Story,
   type Member,
   type Workspace,
+  type Review,
 } from '@/lib/model';
 import { localDay, monday, wallTimeToUtc, download, dateLabel } from '@/lib/date';
 import { Modal, Meta, Badge } from './ui';
+import { sharedStarts, localSlot } from '@/lib/availability';
+import { sessionPhase } from '@/lib/sessions';
 export type Mutate = (action: Action, message?: string) => Promise<void>;
 function useFormTask() {
   const [busy, setBusy] = useState(false);
@@ -200,7 +203,11 @@ export function AvailabilityDialog({
 }) {
   const [slots, setSlots] = useState(profile.availability);
   const [timezone, setTimezone] = useState(profile.timezone);
-  const [skip, setSkip] = useState(profile.skipWeeks.includes(monday()));
+  const [skip, setSkip] = useState(
+    profile.skipWeeks.includes(monday(new Date(), profile.timezone)),
+  );
+  const [customDay, setCustomDay] = useState('Mon');
+  const [customTime, setCustomTime] = useState('10:00');
   const form = useFormTask();
   const toggle = (slot: string) =>
     setSlots((old) => (old.includes(slot) ? old.filter((s) => s !== slot) : [...old, slot]));
@@ -214,7 +221,13 @@ export function AvailabilityDialog({
         Pick the one-hour windows that usually work for you. These repeat each week; your confirmed
         session always has its own date and time.
       </p>
-      <ZoneSelect value={timezone} onChange={setTimezone} />
+      <ZoneSelect
+        value={timezone}
+        onChange={(zone) => {
+          setTimezone(zone);
+          setSkip(profile.skipWeeks.includes(monday(new Date(), zone)));
+        }}
+      />
       <div className="availability-grid">
         <span />
         {days.map((day) => (
@@ -247,6 +260,57 @@ export function AvailabilityDialog({
           </Fragment>
         ))}
       </div>
+      <div className="form-row">
+        <label>
+          Day
+          <select value={customDay} onChange={(e) => setCustomDay(e.target.value)}>
+            {days.map((day) => (
+              <option key={day}>{day}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Custom start time
+          <input
+            type="time"
+            step={900}
+            value={customTime}
+            onChange={(e) => setCustomTime(e.target.value)}
+          />
+        </label>
+      </div>
+      <button
+        type="button"
+        className="button button-secondary"
+        onClick={() =>
+          void form.run(async () => {
+            if (!/^([01][0-9]|2[0-3]):(00|15|30|45)$/.test(customTime))
+              throw new Error('Choose a start time in 15-minute increments.');
+            setSlots((old) => [...new Set([...old, `${customDay}-${customTime}`])]);
+          })
+        }
+      >
+        Add one-hour window
+      </button>
+      <div className="filter-tabs" aria-label="Custom availability">
+        {slots
+          .filter((slot) => !slotTimes.includes(slot.slice(4)))
+          .map((slot) => (
+            <button
+              type="button"
+              className="filter-button"
+              key={slot}
+              aria-label={`Remove ${slot}`}
+              onClick={() => toggle(slot)}
+            >
+              {slot} · Remove
+            </button>
+          ))}
+      </div>
+      <p className="form-note">
+        The grid offers quick picks. Add any other start time in 15-minute increments; each
+        selection reserves one hour.
+      </p>
       <p className="availability-summary">
         {slots.length} weekly window{slots.length !== 1 ? 's' : ''} selected · Times shown in{' '}
         {timezone.split('/').pop()?.replaceAll('_', ' ')}
@@ -273,8 +337,8 @@ export function AvailabilityDialog({
                     timezone,
                     availability: slots,
                     skipWeeks: [
-                      ...profile.skipWeeks.filter((week) => week !== monday()),
-                      ...(skip ? [monday()] : []),
+                      ...profile.skipWeeks.filter((week) => week !== monday(new Date(), timezone)),
+                      ...(skip ? [monday(new Date(), timezone)] : []),
                     ],
                   },
                 },
@@ -319,6 +383,11 @@ export function ScheduleDialog({
   const [timezone, setTimezone] = useState(profile.timezone);
   const [focus, setFocus] = useState(profile.focus);
   const [link, setLink] = useState('');
+  const shared = useMemo(() => {
+    const host = members.find((member) => member.id === hostId);
+    const guest = members.find((member) => member.id === guestId);
+    return host && guest && hostId !== guestId ? sharedStarts(host, guest).slice(0, 12) : [];
+  }, [members, hostId, guestId]);
   const form = useFormTask();
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -362,6 +431,36 @@ export function ScheduleDialog({
           ? 'Try the scheduling flow. This saves a demo session in your browser; it does not match you with a real person or send an invitation.'
           : 'Choose two members and a time within their saved availability. Approving creates the session and queues notifications if email delivery is configured.'}
       </p>
+      {!demo && hostId && guestId && hostId !== guestId && (
+        <section className="guidance-section">
+          <h3>Shared starts in the next two weeks</h3>
+          <p className="form-note">
+            These match both members’ saved windows and skipped weeks. Existing bookings are checked
+            when you approve.
+          </p>
+          {!shared.length && (
+            <p>
+              No shared start times. Ask members to add compatible windows or choose a later date.
+            </p>
+          )}
+          <div className="filter-tabs">
+            {shared.map((instant) => (
+              <button
+                type="button"
+                className="filter-button"
+                key={instant}
+                onClick={() => {
+                  setDate(localDay(new Date(instant), timezone));
+                  setTime(localSlot(instant, timezone).slice(4));
+                }}
+              >
+                {dateLabel(instant, timezone)} · {localSlot(instant, timezone).slice(4)} ({timezone}
+                )
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       <form onSubmit={submit}>
         <div className="form-stack">
           {demo ? (
@@ -639,6 +738,7 @@ export function QuestionDialog({
 }
 
 export function ReviewDialog({
+  review,
   session,
   author,
   demo,
@@ -647,13 +747,14 @@ export function ReviewDialog({
 }: {
   session: Session;
   author: string;
+  review?: Review;
   demo: boolean;
   mutate: Mutate;
   close: () => void;
 }) {
-  const [score, setScore] = useState(3);
-  const [strength, setStrength] = useState('');
-  const [improvement, setImprovement] = useState('');
+  const [score, setScore] = useState(review?.score ?? 3);
+  const [strength, setStrength] = useState(review?.strength ?? '');
+  const [improvement, setImprovement] = useState(review?.improvement ?? '');
   const form = useFormTask();
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -844,7 +945,53 @@ export function SessionDetailsDialog({
 }) {
   const [link, setLink] = useState(session.link);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [outcome, setOutcome] = useState<'completed' | 'no_show'>('completed');
   const form = useFormTask();
+  if (sessionPhase(session) === 'awaiting_outcome')
+    return (
+      <Modal title="How did the session go?" eyebrow="RECORD SESSION OUTCOME" onClose={close}>
+        <p className="modal-description">
+          The scheduled hour with {session.partner} has ended. Record whether you practiced
+          together. This outcome is shared by both participants; feedback is a separate step.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void form.run(async () => {
+              await mutate(
+                { type: 'outcome', id: session.id, outcome },
+                'Session outcome recorded.',
+              );
+              close();
+            });
+          }}
+        >
+          <label>
+            Session outcome
+            <select
+              value={outcome}
+              onChange={(event) => setOutcome(event.target.value as 'completed' | 'no_show')}
+            >
+              <option value="completed">Completed — we practiced together</option>
+              <option value="no_show">Did not take place</option>
+            </select>
+          </label>
+          <p className="form-note">
+            Confirm this with your partner. If an outcome is recorded incorrectly, contact the
+            administrator for correction.
+          </p>
+          <FormError error={form.error} />
+          <div className="form-actions">
+            <button type="button" className="button button-secondary" onClick={close}>
+              Back
+            </button>
+            <button disabled={form.busy} className="button button-primary">
+              Save outcome
+            </button>
+          </div>
+        </form>
+      </Modal>
+    );
   if (session.status !== 'upcoming')
     return (
       <Modal
@@ -857,9 +1004,11 @@ export function SessionDetailsDialog({
         onClose={close}
       >
         <p className="modal-description">
-          {session.status === 'cancelled'
-            ? 'This session was cancelled. Ask the administrator to arrange another time, or explore a question on your own.'
-            : 'Your private notes from this practice. Only you can see them.'}
+          {session.status === 'no_show'
+            ? 'This session did not take place. Ask the administrator to arrange another time. No peer feedback is requested.'
+            : session.status === 'cancelled'
+              ? 'This session was cancelled. Ask the administrator to arrange another time, or explore a question on your own.'
+              : 'Your private notes from this practice. Only you can see them.'}
         </p>
         {Object.entries(session.notes)
           .filter(([, note]) => note.trim())
@@ -884,6 +1033,10 @@ export function SessionDetailsDialog({
       <p className="modal-description">
         Add a meeting link you and {session.partner} can use. Wunderbar guides the interview while
         your call stays on Meet or Zoom.
+      </p>
+      <p className="form-note">
+        You can record the outcome after the scheduled hour ends. Feedback becomes available once
+        the session is marked completed.
       </p>
       <form
         onSubmit={(event) => {

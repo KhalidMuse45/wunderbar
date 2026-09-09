@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import { competencies } from '@/content/questions';
+import { checkOutcome, sessionPhase } from './sessions';
 export const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export const slotTimes = ['09:00', '12:00', '15:00', '18:00'];
 export const timezones = [
+  'UTC',
+  'Asia/Kathmandu',
   'America/Chicago',
   'America/New_York',
   'America/Denver',
@@ -28,8 +31,8 @@ export const profileSchema = z.object({
   timezone: timezoneSchema,
   onboarded: z.boolean(),
   availability: z
-    .array(z.string().regex(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-(09|12|15|18):00$/))
-    .max(28),
+    .array(z.string().regex(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-([01][0-9]|2[0-3]):(00|15|30|45)$/))
+    .max(672),
   skipWeeks: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(52),
 });
 // New database profiles have no name yet. Loading them must allow onboarding,
@@ -79,7 +82,7 @@ export const sessionSchema = z.object({
   timezone: timezoneSchema,
   focus: z.enum(competencies),
   link: meetingSchema,
-  status: z.enum(['upcoming', 'completed', 'cancelled']),
+  status: z.enum(['upcoming', 'completed', 'cancelled', 'no_show']),
   sample: z.boolean().optional(),
   questionIds: z.array(z.string()),
   notes: z.record(z.string()),
@@ -140,6 +143,7 @@ export type Action =
   | { type: 'bookmark'; id: string }
   | { type: 'schedule'; session: Session; hostId?: string; guestId?: string }
   | { type: 'notes'; id: string; notes: Record<string, string> }
+  | { type: 'outcome'; id: string; outcome: 'completed' | 'no_show' }
   | { type: 'cancel'; id: string }
   | { type: 'link'; id: string; link: string }
   | { type: 'review'; review: Review }
@@ -189,7 +193,21 @@ export function reduceWorkspace(state: Workspace, action: Action): Workspace {
           session.id === action.id ? { ...session, notes: action.notes } : session,
         ),
       };
+    case 'outcome':
+      {
+        const session = state.sessions.find((s) => s.id === action.id);
+        if (!session) throw new Error('Session not found.');
+        checkOutcome(session, action.outcome);
+      }
+      return {
+        ...state,
+        sessions: state.sessions.map((session) =>
+          session.id === action.id ? { ...session, status: action.outcome } : session,
+        ),
+      };
     case 'cancel':
+      if (state.sessions.some((s) => s.id === action.id && sessionPhase(s) === 'awaiting_outcome'))
+        throw new Error('This session has ended. Record its outcome.');
       return {
         ...state,
         sessions: state.sessions.map((session) =>
@@ -204,6 +222,8 @@ export function reduceWorkspace(state: Workspace, action: Action): Workspace {
         ),
       };
     case 'review':
+      if (!state.sessions.some((s) => s.id === action.review.sessionId && s.status === 'completed'))
+        throw new Error('Record a completed session before leaving feedback.');
       return {
         ...state,
         reviews: [
@@ -212,9 +232,6 @@ export function reduceWorkspace(state: Workspace, action: Action): Workspace {
           ),
           action.review,
         ],
-        sessions: state.sessions.map((session) =>
-          session.id === action.review.sessionId ? { ...session, status: 'completed' } : session,
-        ),
       };
     case 'idea':
       return { ...state, ideas: [action.idea, ...state.ideas] };

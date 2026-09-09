@@ -338,7 +338,7 @@ export function PracticeRoom({
           </button>
         )}
         <button className="button button-primary" disabled={saving} onClick={end}>
-          {session ? 'Finish & give feedback' : 'Save as a story'}
+          {session ? 'Finish session' : 'Save as a story'}
           <ArrowRight size={15} />
         </button>
       </div>

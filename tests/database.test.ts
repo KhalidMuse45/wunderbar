@@ -23,6 +23,12 @@ test('Postgres migration and member authorization boundaries', async (t) => {
     await db.exec(
       await readFile(new URL('../supabase/migrations/001_mvp.sql', import.meta.url), 'utf8'),
     );
+    await db.exec(
+      await readFile(
+        new URL('../supabase/migrations/002_availability_outcomes.sql', import.meta.url),
+        'utf8',
+      ),
+    );
     for (const [name, id] of Object.entries(ids)) {
       await db.query('insert into auth.users(id,email) values($1,$2)', [id, `${name}@example.com`]);
       await db.query(
@@ -181,7 +187,7 @@ test('Postgres migration and member authorization boundaries', async (t) => {
                 [session],
               ),
             ),
-          /after the session starts/,
+          /Record a completed session/,
         );
         await db.query("update public.sessions set starts_at=now()-interval '1 hour' where id=$1", [
           session,
@@ -195,6 +201,9 @@ test('Postgres migration and member authorization boundaries', async (t) => {
               ),
             ),
           /Only session participants/,
+        );
+        await asUser(ids.a, (tx) =>
+          tx.query("select public.record_session_outcome($1,'completed')", [session]),
         );
         await asUser(ids.a, (tx) =>
           tx.query(

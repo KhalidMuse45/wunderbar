@@ -1,4 +1,5 @@
 'use client';
+import { sessionPhase, sessionLabels } from '@/lib/sessions';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -107,6 +108,11 @@ const STORAGE_KEY = 'wunderbar-workspace-v1';
 export default function Workspace({ initial, demo }: { initial: WorkspaceData; demo: boolean }) {
   const [data, setData] = useState(initial);
   const [loaded, setLoaded] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const clock = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(clock);
+  }, []);
   const [view, setView] = useState<View>('overview');
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [menu, setMenu] = useState(false);
@@ -269,7 +275,7 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
   };
   const completed = data.sessions.filter((s) => s.status === 'completed');
   const upcoming = data.sessions
-    .filter((s) => s.status === 'upcoming')
+    .filter((s) => sessionPhase(s, now) === 'upcoming')
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
   const received = data.reviews.filter((review) => review.received);
   const focusQuestions = questions.filter((question) => question.competency === data.profile.focus);
@@ -290,14 +296,9 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
           <h3>{session.partner}</h3>
           <p>{session.partnerRole}</p>
         </div>
-        <Badge tone={session.status === 'upcoming' ? 'green' : ''}>
-          {session.sample
-            ? 'Sample session'
-            : session.status === 'upcoming'
-              ? 'Confirmed'
-              : session.status === 'completed'
-                ? 'Completed'
-                : 'Cancelled'}
+        <Badge tone={sessionPhase(session, now) === 'upcoming' ? 'green' : ''}>
+          {session.sample ? 'Sample session · ' : ''}
+          {sessionLabels[sessionPhase(session, now)]}
         </Badge>
       </div>
       <div className="session-schedule">
@@ -323,19 +324,34 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
         ) : (
           <button
             className="text-link"
-            onClick={() => {
-              const review = received.find((r) => r.sessionId === session.id);
-              if (review) setDialog({ type: 'received', review });
-              else if (session.status === 'completed') setDialog({ type: 'review', session });
-              else setDialog({ type: 'details', session });
-            }}
+            onClick={() =>
+              setDialog({ type: session.status === 'completed' ? 'review' : 'details', session })
+            }
           >
-            {session.status === 'cancelled'
-              ? 'Session details'
-              : received.some((r) => r.sessionId === session.id)
-                ? 'Read peer feedback'
-                : 'Leave feedback'}
+            {session.status === 'completed'
+              ? data.reviews.some((r) => r.sessionId === session.id && !r.received)
+                ? 'Edit my feedback'
+                : 'Leave feedback'
+              : 'Session details'}
             <ArrowUpRight size={14} />
+          </button>
+        )}
+        {sessionPhase(session, now) === 'awaiting_outcome' && (
+          <button className="text-link" onClick={() => setDialog({ type: 'details', session })}>
+            Record outcome
+          </button>
+        )}
+        {session.status === 'completed' && received.some((r) => r.sessionId === session.id) && (
+          <button
+            className="text-link"
+            onClick={() =>
+              setDialog({
+                type: 'received',
+                review: received.find((r) => r.sessionId === session.id)!,
+              })
+            }
+          >
+            Read peer feedback
           </button>
         )}
         <div style={{ display: 'flex', gap: 7 }}>
@@ -357,6 +373,14 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
           )}
         </div>
       </div>
+      {session.status === 'completed' && (
+        <p className="form-note">
+          Your feedback:{' '}
+          {data.reviews.some((r) => r.sessionId === session.id && !r.received) ? 'Sent' : 'Pending'}{' '}
+          · Partner feedback:{' '}
+          {received.some((r) => r.sessionId === session.id) ? 'Received' : 'Pending'}
+        </p>
+      )}
     </article>
   );
 
@@ -800,22 +824,24 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
               {view === 'sessions' && (
                 <>
                   <div className="filter-tabs" aria-label="Filter sessions">
-                    {['upcoming', 'completed', 'cancelled'].map((tab) => (
+                    {(
+                      ['upcoming', 'awaiting_outcome', 'completed', 'no_show', 'cancelled'] as const
+                    ).map((tab) => (
                       <button
                         key={tab}
                         className={`filter-button ${sessionTab === tab ? 'active' : ''}`}
                         onClick={() => setSessionTab(tab)}
                         aria-pressed={sessionTab === tab}
                       >
-                        {tab[0].toUpperCase() + tab.slice(1)} ·{' '}
-                        {data.sessions.filter((s) => s.status === tab).length}
+                        {sessionLabels[tab]} ·{' '}
+                        {data.sessions.filter((s) => sessionPhase(s, now) === tab).length}
                       </button>
                     ))}
                   </div>
-                  {data.sessions.some((s) => s.status === sessionTab) ? (
+                  {data.sessions.some((s) => sessionPhase(s, now) === sessionTab) ? (
                     <div className="sessions-grid">
                       {data.sessions
-                        .filter((s) => s.status === sessionTab)
+                        .filter((s) => sessionPhase(s, now) === sessionTab)
                         .sort((a, b) =>
                           sessionTab === 'upcoming'
                             ? a.startsAt.localeCompare(b.startsAt)
@@ -1256,6 +1282,7 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
       {dialog?.type === 'review' && (
         <ReviewDialog
           session={dialog.session}
+          review={data.reviews.find((r) => r.sessionId === dialog.session.id && !r.received)}
           author={data.profile.name}
           demo={demo}
           mutate={mutate}
@@ -1278,7 +1305,9 @@ export default function Workspace({ initial, demo }: { initial: WorkspaceData; d
           demo={demo}
           mutate={mutate}
           close={close}
-          finish={(session) => setDialog({ type: 'review', session })}
+          finish={(session) =>
+            setDialog({ type: session.status === 'completed' ? 'review' : 'details', session })
+          }
           saveStory={(story) => setDialog({ type: 'story', story })}
         />
       )}

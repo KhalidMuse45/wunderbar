@@ -165,6 +165,11 @@ const actionSchema = z.discriminatedUnion('type', [
     id: z.string().uuid(),
     notes: z.record(z.string().max(10000)).refine((notes) => Object.keys(notes).length <= 7),
   }),
+  z.object({
+    type: z.literal('outcome'),
+    id: z.string().uuid(),
+    outcome: z.enum(['completed', 'no_show']),
+  }),
   z.object({ type: z.literal('cancel'), id: z.string().uuid() }),
   z.object({ type: z.literal('link'), id: z.string().uuid(), link: meetingSchema }),
   z.object({
@@ -216,22 +221,20 @@ export async function POST(request: NextRequest) {
       case 'story': {
         const s = a.story;
         check(
-          await client
-            .from('stories')
-            .upsert(
-              {
-                id: s.id,
-                user_id: id,
-                title: s.title,
-                competency: s.competency,
-                situation: s.situation,
-                task: s.task,
-                action: s.action,
-                result: s.result,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: 'id' },
-            ),
+          await client.from('stories').upsert(
+            {
+              id: s.id,
+              user_id: id,
+              title: s.title,
+              competency: s.competency,
+              situation: s.situation,
+              task: s.task,
+              action: s.action,
+              result: s.result,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'id' },
+          ),
         );
         break;
       }
@@ -297,6 +300,11 @@ export async function POST(request: NextRequest) {
             ),
         );
         break;
+      case 'outcome':
+        check(
+          await client.rpc('record_session_outcome', { p_session: a.id, p_outcome: a.outcome }),
+        );
+        break;
       case 'cancel':
         check(await client.rpc('update_session', { p_session: a.id, p_operation: 'cancel' }));
         break;
@@ -337,7 +345,10 @@ export async function POST(request: NextRequest) {
       'Both members must finish their profiles.',
       'This session is no longer upcoming.',
       'This session was cancelled.',
-      'You can submit feedback after the session starts.',
+      'Record a completed session before leaving feedback.',
+      'You can record the outcome after the scheduled hour ends.',
+      'This session has ended. Record its outcome.',
+      'This session already has a different outcome.',
       'Choose two different members and a future time.',
     ];
     return json(

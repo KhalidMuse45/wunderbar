@@ -23,7 +23,7 @@ The demo supports availability selection, profile edits, question search/filter/
 
 The connected-account path is implemented but needs a Supabase project and email settings. No provider accounts, production database, domain, invitations, or deployment have been created by this implementation.
 
-1. Create a dedicated Supabase project. Apply `supabase/migrations/001_mvp.sql` in a development project first.
+1. Create a dedicated Supabase project. Apply the SQL files in `supabase/migrations/` in numeric order (`001_mvp.sql`, then `002_availability_outcomes.sql`) in a development project first. If `001` is already installed, apply only `002`; do not rerun `001`.
 2. Copy `.env.example` to `.env.local`. Set `NEXT_PUBLIC_SUPABASE_URL`, either `NEXT_PUBLIC_SUPABASE_ANON_KEY` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and `NEXT_PUBLIC_SITE_URL`.
 3. Configure Supabase Auth’s site URL and allowed redirect URLs. For local work, allow `http://localhost:3400/auth/confirm`. Use the exact production origin when deploying.
 4. Configure a verified SMTP sender in Supabase for reliable auth email delivery. Existing-account magic links are supported; public self-signup is disabled with `shouldCreateUser: false`.
@@ -40,6 +40,8 @@ The connected-account path is implemented but needs a Supabase project and email
 Members own their profiles and bookmarks. Stories and notes are private even from the application’s matching administrator. Participants can see only their own sessions and submitted peer reviews. Database operators with privileged access remain capable of accessing project data. Administrator status comes from a private database table, never a client-supplied role.
 
 ## Reminders
+
+Apply migration `002_availability_outcomes.sql` before running the updated connected app. Existing availability and completed sessions are preserved. The local demo does not need a database migration.
 
 The database queues confirmation, day-before, hour-before, feedback, meeting-link-update and cancellation notifications. Nothing is sent until the worker is configured and invoked.
 
@@ -68,14 +70,15 @@ Browser tests use installed Google Chrome on macOS when available. Elsewhere, ru
 - Domain tests cover DST gaps/repeated hours, calendar timestamps/escaping, link validation, persistence, and feedback ownership.
 - Database tests execute the real migration against embedded PostgreSQL (PGlite), with separate anonymous, member, and administrator roles. They check row-level security, matching restrictions, private notes, feedback, cancellation, and notification access.
 - Playwright checks desktop/mobile layout and the local demo’s main user journeys.
-- Connected-flow browser tests run the real application routes against a local Supabase HTTP fixture on ports 3401 and 3402. They cover invite callbacks, first-time onboarding, strict profile submission validation, persistence after reload, failed loads/saves, returning members, and expired sessions. The fixture uses synthetic credentials and is never included in application routes; keep those ports free when running it.
+- Connected-flow browser tests run the real application routes against a local Supabase HTTP fixture on ports 3401 and 3402. They cover invite callbacks, first-time onboarding, strict profile submission validation, persistence after reload, failed loads/saves, returning members, expired sessions, custom availability, explicit outcomes, and separate peer feedback. The fixture uses synthetic credentials and is never included in application routes; keep those ports free when running it.
 - These tests do not replace a two-user smoke test against a configured Supabase project and real email provider.
 
 The independent GitHub Actions workflow installs Node 22, runs application and database checks, builds the app, and tests the browser flows. It does not deploy.
 
 ## MVP boundaries
 
-- Manual match approval, with saved-availability and overlapping-booking checks. No automatic matcher or matching reputation score.
+- Manual match approval, with one-hour availability windows starting at any quarter hour, shared-start suggestions for the next two weeks, skipped-week checks in each member’s timezone, and overlapping-booking checks. The database makes the final booking decision. No automatic matcher or matching reputation score.
+- Elapsed bookings appear under **Needs outcome**. After the scheduled hour, a participant records **Completed** or **Did not take place** for both members. Each participant’s feedback is tracked separately and is allowed only for completed sessions. Incorrect recorded outcomes require administrator correction; there is no automated attendance detection or dispute process.
 - A library of 40 authored questions with topic-level follow-ups and rubrics. Review the content with the cohort before production publication. Question definitions are bundled with the app; preserve existing IDs/text when adding future versions used by past sessions.
 - Manual role coordination and answer timers, not a synchronized video room. Notes have explicit save controls and also save when leaving the guide. Timer state persists on the device; question/role state is not synchronized between participants.
 - Peer feedback is intentionally short: a clarity rating, one specific strength, and one concrete next step. A participant can revise their own submitted feedback. No AI scoring or transcription.
