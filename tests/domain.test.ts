@@ -1,9 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { calendarFile, wallTimeToUtc } from '../lib/date';
-import { safeMeetingLink, reduceWorkspace, workspaceSchema } from '../lib/model';
+import {
+  safeMeetingLink,
+  reduceWorkspace,
+  workspaceSchema,
+  emptyWorkspace,
+  profileSchema,
+} from '../lib/model';
 import { demoWorkspace } from '../lib/demo';
 import { competencies, questions } from '../content/questions';
+
+test('a new account can load its blank profile before onboarding', () => {
+  const parsed = workspaceSchema.parse(emptyWorkspace);
+  assert.equal(parsed.profile.name, '');
+  assert.equal(parsed.profile.onboarded, false);
+});
+
+test('blank names are rejected for profile submissions and completed profiles', () => {
+  for (const name of ['', '   ']) {
+    for (const onboarded of [false, true]) {
+      assert.equal(
+        profileSchema.safeParse({ ...emptyWorkspace.profile, name, onboarded }).success,
+        false,
+      );
+    }
+    assert.equal(
+      workspaceSchema.safeParse({
+        ...emptyWorkspace,
+        profile: { ...emptyWorkspace.profile, name, onboarded: true },
+      }).success,
+      false,
+    );
+  }
+  assert.equal(
+    profileSchema.parse({ ...emptyWorkspace.profile, name: ' Morgan ', onboarded: true }).name,
+    'Morgan',
+  );
+});
 
 test('the question bank has 40 unique, fully scaffolded questions across six topics', () => {
   assert.equal(questions.length, 40);

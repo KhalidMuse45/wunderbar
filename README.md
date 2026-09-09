@@ -59,6 +59,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run test:e2e
+npm run test:connected
 npm run build
 ```
 
@@ -67,6 +68,7 @@ Browser tests use installed Google Chrome on macOS when available. Elsewhere, ru
 - Domain tests cover DST gaps/repeated hours, calendar timestamps/escaping, link validation, persistence, and feedback ownership.
 - Database tests execute the real migration against embedded PostgreSQL (PGlite), with separate anonymous, member, and administrator roles. They check row-level security, matching restrictions, private notes, feedback, cancellation, and notification access.
 - Playwright checks desktop/mobile layout and the local demo’s main user journeys.
+- Connected-flow browser tests run the real application routes against a local Supabase HTTP fixture on ports 3401 and 3402. They cover invite callbacks, first-time onboarding, strict profile submission validation, persistence after reload, failed loads/saves, returning members, and expired sessions. The fixture uses synthetic credentials and is never included in application routes; keep those ports free when running it.
 - These tests do not replace a two-user smoke test against a configured Supabase project and real email provider.
 
 The independent GitHub Actions workflow installs Node 22, runs application and database checks, builds the app, and tests the browser flows. It does not deploy.

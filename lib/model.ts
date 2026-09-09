@@ -32,6 +32,14 @@ export const profileSchema = z.object({
     .max(28),
   skipWeeks: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(52),
 });
+// New database profiles have no name yet. Loading them must allow onboarding,
+// while profileSchema continues to require a name for every submitted edit.
+export const storedProfileSchema = profileSchema
+  .extend({ name: z.string().trim().max(70) })
+  .refine((profile) => !profile.onboarded || profile.name.length > 0, {
+    message: 'Add your name.',
+    path: ['name'],
+  });
 export const storySchema = z.object({
   id: z.string().uuid(),
   title: z.string().trim().min(1).max(150),
@@ -103,7 +111,7 @@ export const ideaSchema = z.object({
 });
 export const workspaceSchema = z.object({
   version: z.literal(1),
-  profile: profileSchema,
+  profile: storedProfileSchema,
   sessions: z.array(sessionSchema),
   stories: z.array(storySchema),
   reviews: z.array(reviewSchema),
