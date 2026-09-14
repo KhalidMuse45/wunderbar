@@ -23,11 +23,11 @@ The demo supports availability selection, profile edits, question search/filter/
 
 The connected-account path is implemented but needs a Supabase project and email settings. No provider accounts, production database, domain, invitations, or deployment have been created by this implementation.
 
-1. Create a dedicated Supabase project. Apply the SQL files in `supabase/migrations/` in numeric order (`001_mvp.sql`, then `002_availability_outcomes.sql`) in a development project first. If `001` is already installed, apply only `002`; do not rerun `001`.
+1. Create a dedicated Supabase project. Apply the SQL files in `supabase/migrations/` in numeric order (`001_mvp.sql`, `002_availability_outcomes.sql`, then `003_umn_access.sql`) in a development project first. Apply only the files you have not already installed; do not rerun an earlier one.
 2. Copy `.env.example` to `.env.local`. Set `NEXT_PUBLIC_SUPABASE_URL`, either `NEXT_PUBLIC_SUPABASE_ANON_KEY` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and `NEXT_PUBLIC_SITE_URL`.
 3. Configure Supabase Auth’s site URL and allowed redirect URLs. For local work, allow `http://localhost:3400/auth/confirm`. Use the exact production origin when deploying.
 4. Configure a verified SMTP sender in Supabase for reliable auth email delivery. Existing-account magic links are supported; public self-signup is disabled with `shouldCreateUser: false`.
-5. Provision your initial users through Supabase’s administrator tools. Send invitations only to people who have agreed to participate. The callback handles PKCE codes and `token_hash` links with `type=email` or `type=invite`. For cross-device magic links, configure the auth email template to use `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email`; use `type=invite` in the invitation template.
+5. Provision your initial users through Supabase’s administrator tools. Only `@umn.edu` addresses can create a profile; see **Who can sign in** below. Send invitations only to people who have agreed to participate. The callback handles PKCE codes and `token_hash` links with `type=email` or `type=invite`. For cross-device magic links, configure the auth email template to use `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email`; use `type=invite` in the invitation template.
 6. After your own auth user exists, assign administrator access in the SQL editor using your actual user UUID:
 
    ```sql
@@ -36,6 +36,17 @@ The connected-account path is implemented but needs a Supabase project and email
 
 7. Sign in at `/login`. Complete each test member’s profile and availability. The administrator will see **Match members** in the sidebar and can approve two members for an overlapping one-hour window.
 8. Test with two consenting accounts before inviting the cohort. The full connected journey still requires live-provider verification: login delivery, callbacks, refresh, cross-account behavior through the deployed API, and email sending.
+
+### Who can sign in
+
+Access is limited to University of Minnesota Twin Cities addresses. Two layers enforce this:
+
+- `app/login/actions.ts` rejects non-UMN addresses before requesting a magic link. This is a courtesy message only — the anon key is public, so a determined caller can reach Supabase auth directly.
+- `public.profiles`’ insert policy (`003_umn_access.sql`) requires `public.is_umn_email(auth.jwt() ->> 'email')`. Without a profile a member cannot be matched or hold sessions, so this is the gate that actually holds.
+
+To admit other UMN campuses (`d.umn.edu`, `r.umn.edu`, `morris.umn.edu`, `crk.umn.edu`), widen the pattern in **both** `003_umn_access.sql` and `lib/access.ts`; they are asserted against each other in `tests/database.test.ts` and `tests/domain.test.ts`.
+
+Two limits worth knowing. Alumni keep UMN addresses, so the domain proves affiliation, not current enrolment. And `stories`, `bookmarks`, and `session_notes` key off `auth.users` rather than `profiles`, so a non-UMN account that somehow exists could still hold private notes — it simply cannot be matched or join a session. Enabling self-signup would additionally require a Before User Created auth hook; `shouldCreateUser: false` is what keeps accounts invite-only today.
 
 Members own their profiles and bookmarks. Stories and notes are private even from the application’s matching administrator. Participants can see only their own sessions and submitted peer reviews. Database operators with privileged access remain capable of accessing project data. Administrator status comes from a private database table, never a client-supplied role.
 

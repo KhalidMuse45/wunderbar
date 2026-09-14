@@ -8,6 +8,7 @@ import {
   emptyWorkspace,
   profileSchema,
 } from '../lib/model';
+import { isUmnEmail } from '../lib/access';
 import { demoWorkspace } from '../lib/demo';
 import { competencies, questions } from '../content/questions';
 
@@ -117,4 +118,21 @@ test('malformed saved state and unsafe links are rejected', () => {
     }).success,
     false,
   );
+});
+
+test('sign-in is limited to University of Minnesota addresses', () => {
+  for (const address of ['gopher@umn.edu', ' Gopher@UMN.edu ', 'a.b+tag@umn.edu'])
+    assert.equal(isUmnEmail(address), true, address);
+  // Lookalikes, other campuses, and embedded domains stay out. This mirrors
+  // public.is_umn_email; the database is what actually enforces it.
+  for (const address of [
+    'gopher@notumn.edu',
+    'gopher@umn.edu.example.com',
+    'gopher@d.umn.edu',
+    'gopher@umn.edu@evil.com',
+    'gopher@gmail.com',
+    '@umn.edu',
+    '',
+  ])
+    assert.equal(isUmnEmail(address), false, address);
 });

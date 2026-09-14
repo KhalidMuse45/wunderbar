@@ -13,6 +13,7 @@ import {
   type Workspace,
   type Member,
 } from '@/lib/model';
+import { umnAccessMessage } from '@/lib/access';
 import { questions } from '@/content/questions';
 export const dynamic = 'force-dynamic';
 const json = (body: unknown, status = 200) =>
@@ -43,6 +44,9 @@ export async function GET() {
     check(profileResult);
     if (!profileResult.data) {
       const created = await client.from('profiles').insert({ id });
+      // The profiles_create policy rejects addresses outside the chapter. Say so
+      // plainly instead of failing as an unexplained workspace error.
+      if (created.error?.code === '42501') return json({ error: umnAccessMessage }, 403);
       if (created.error && created.error.code !== '23505') check(created);
       profileResult = await client.from('profiles').select('*').eq('id', id).single();
       check(profileResult);

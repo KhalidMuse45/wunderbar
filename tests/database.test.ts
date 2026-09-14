@@ -10,15 +10,24 @@ const ids = {
 };
 test('Postgres migration and member authorization boundaries', async (t) => {
   const db = new PGlite();
-  const asUser = <T>(id: string, work: (tx: Transaction) => Promise<T>) =>
+  const memberEmail = (id: string) =>
+    `${Object.entries(ids).find(([, value]) => value === id)?.[0] ?? 'member'}@umn.edu`;
+  const asUser = <T>(
+    id: string,
+    work: (tx: Transaction) => Promise<T>,
+    email: string = memberEmail(id),
+  ) =>
     db.transaction(async (tx) => {
       await tx.exec('set local role authenticated');
       await tx.query("select set_config('request.jwt.claim.sub',$1,true)", [id]);
+      await tx.query("select set_config('request.jwt.claims',$1,true)", [
+        JSON.stringify({ sub: id, email }),
+      ]);
       return work(tx);
     });
   try {
     await db.exec(
-      `create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key,email text); create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$; grant usage on schema auth to authenticated;`,
+      `create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key,email text); create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$; create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims',true),'')::jsonb,'{}'::jsonb) $$; grant usage on schema auth to authenticated;`,
     );
     await db.exec(
       await readFile(new URL('../supabase/migrations/001_mvp.sql', import.meta.url), 'utf8'),
@@ -29,8 +38,11 @@ test('Postgres migration and member authorization boundaries', async (t) => {
         'utf8',
       ),
     );
+    await db.exec(
+      await readFile(new URL('../supabase/migrations/003_umn_access.sql', import.meta.url), 'utf8'),
+    );
     for (const [name, id] of Object.entries(ids)) {
-      await db.query('insert into auth.users(id,email) values($1,$2)', [id, `${name}@example.com`]);
+      await db.query('insert into auth.users(id,email) values($1,$2)', [id, `${name}@umn.edu`]);
       await db.query(
         "insert into public.profiles(id,name,onboarded,timezone,availability) values($1,$2,true,'UTC',ARRAY['Mon-18:00','Tue-18:00','Wed-18:00','Thu-18:00','Fri-18:00','Sat-18:00','Sun-18:00'])",
         [id, name],
@@ -45,6 +57,58 @@ test('Postgres migration and member authorization boundaries', async (t) => {
             await tx.query('select * from public.profiles');
           }),
         /permission denied/,
+      );
+    });
+    await t.test('only University of Minnesota addresses can create a profile', async () => {
+      const outsider = '10000000-0000-4000-8000-000000000005';
+      const student = '10000000-0000-4000-8000-000000000006';
+      await db.query('insert into auth.users(id,email) values($1,$2)', [
+        outsider,
+        'someone@gmail.com',
+      ]);
+      await db.query('insert into auth.users(id,email) values($1,$2)', [
+        student,
+        'Gopher@UMN.edu',
+      ]);
+      await assert.rejects(
+        () =>
+          asUser(
+            outsider,
+            (tx) => tx.query('insert into public.profiles(id) values($1)', [outsider]),
+            'someone@gmail.com',
+          ),
+        /row-level security/,
+      );
+      // Mixed case is accepted; lookalike domains and a missing address are not.
+      await asUser(
+        student,
+        (tx) => tx.query('insert into public.profiles(id) values($1)', [student]),
+        'Gopher@UMN.edu',
+      );
+      const created = await asUser(student, (tx) =>
+        tx.query('select id from public.profiles where id = $1', [student]),
+      );
+      assert.equal(created.rows.length, 1);
+      const checks = await db.query<{ address: string; allowed: boolean }>(
+        'select address, public.is_umn_email(address) as allowed from unnest($1::text[]) address',
+        [
+          [
+            'gopher@umn.edu',
+            'gopher@notumn.edu',
+            'gopher@umn.edu.example.com',
+            'gopher@d.umn.edu',
+            'gopher@umn.edu@evil.com',
+          ],
+        ],
+      );
+      assert.deepEqual(
+        checks.rows.map((row) => row.allowed),
+        [true, false, false, false, false],
+      );
+      assert.equal(
+        (await db.query<{ allowed: boolean }>('select public.is_umn_email(null) as allowed'))
+          .rows[0].allowed,
+        false,
       );
     });
     await t.test(
