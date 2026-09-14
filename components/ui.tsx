@@ -1,14 +1,20 @@
 'use client';
 import Link from 'next/link';
+import Image from 'next/image';
 import { X, ArrowUpRight } from 'lucide-react';
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 export function Brand({ small = false }: { small?: boolean }) {
   return (
     <Link href="/" className={`brand ${small ? 'brand-small' : ''}`} aria-label="Wunderbar home">
-      <span className="brand-glyph" aria-hidden="true">
-        ✳
-      </span>
-      wunderbar<span className="brand-dot">.</span>
+      <Image
+        className="brand-glyph"
+        src="/images/wunderbar-logo.webp"
+        alt=""
+        width={1536}
+        height={1525}
+        sizes="45px"
+      />
+      wunderbar
     </Link>
   );
 }

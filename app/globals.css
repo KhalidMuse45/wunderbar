@@ -122,14 +122,14 @@ p {
   color: var(--maroon);
 }
 .brand-glyph {
-  font-family: Georgia, serif;
+  display: block;
+  width: 1em;
+  height: auto;
+  flex-shrink: 0;
   font-size: 45px;
-  font-weight: 400;
-  line-height: 0.8;
   margin-right: 9px;
-}
-.brand-dot {
-  color: var(--maroon);
+  border-radius: 0.18em;
+  box-shadow: 0 0 0 1px var(--line);
 }
 .brand-small {
   font-size: 23px;
